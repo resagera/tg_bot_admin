@@ -1,0 +1,7 @@
+{
+  "token": "TOKEN",
+  "base_url": "https://domain.ru",
+  "listen_addr": ":8483",
+  "data_dir": "./data",
+  "initial_admins": [123, 321]
+}
