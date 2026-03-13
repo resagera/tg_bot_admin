@@ -258,6 +258,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("telegram init: %v", err)
 	}
+
+	_, err = bot.Request(tgbotapi.DeleteWebhookConfig{
+		DropPendingUpdates: true,
+	})
+	if err != nil {
+		log.Fatalf("delete webhook: %v", err)
+	}
 	bot.Debug = false
 
 	log.Printf("authorized as @%s", bot.Self.UserName)
@@ -269,14 +276,23 @@ func main() {
 
 	for upd := range updates {
 		if upd.Message == nil {
+			log.Printf("skip non-message update")
 			continue
 		}
+		log.Printf(
+			"message: user_id=%d chat_id=%d text=%q",
+			upd.Message.From.ID,
+			upd.Message.Chat.ID,
+			upd.Message.Text,
+		)
 		if err := handleMessage(bot, store, cfg, upd.Message); err != nil {
 			log.Printf("handle message error: %v", err)
 			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "Ошибка: "+err.Error())
 			_, _ = bot.Send(msg)
 		}
-		_ = store.Save()
+		if err := store.Save(); err != nil {
+			log.Printf("store save error: %v", err)
+		}
 	}
 }
 
