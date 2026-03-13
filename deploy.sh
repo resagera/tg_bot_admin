@@ -14,8 +14,57 @@ WORKDIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_BIN="${WORKDIR}/${APP_NAME}"
 TMP_BIN="${INSTALL_DIR}/${APP_NAME}.new"
 
+UPDATE_CONFIG=0
+SHOW_LOGS=0
+UPDATE_REPO=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --config)
+      UPDATE_CONFIG=1
+      ;;
+    --logs)
+      SHOW_LOGS=1
+      ;;
+    --rep)
+      UPDATE_REPO=1
+      ;;
+    *)
+      echo "Unknown option: $arg"
+      echo "Usage: ./deploy.sh [--config] [--logs] [--rep]"
+      exit 1
+      ;;
+  esac
+done
+
+require_file() {
+  local path="$1"
+  if [ ! -f "$path" ]; then
+    echo "Required file not found: $path"
+    exit 1
+  fi
+}
+
+echo "==> workdir: $WORKDIR"
+
+if [ "$UPDATE_REPO" -eq 1 ]; then
+  echo "==> update repository from git (hard reset)"
+  if [ ! -d "$WORKDIR/.git" ]; then
+    echo "Current folder is not a git repository: $WORKDIR"
+    exit 1
+  fi
+
+  branch="$(git -C "$WORKDIR" rev-parse --abbrev-ref HEAD)"
+  echo "==> current branch: $branch"
+
+  git -C "$WORKDIR" fetch origin
+  git -C "$WORKDIR" reset --hard "origin/$branch"
+  git -C "$WORKDIR" clean -fd
+fi
+
 echo "==> build"
 cd "$WORKDIR"
+require_file "$WORKDIR/config.json"
 go mod tidy
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$BUILD_BIN" .
 
@@ -23,15 +72,17 @@ echo "==> prepare dirs"
 sudo mkdir -p "${INSTALL_DIR}/data/pages"
 sudo chown -R "${APP_USER}:${APP_GROUP}" "${INSTALL_DIR}"
 
-if [ ! -f "$WORKDIR/config.json" ]; then
-  echo "config.json not found in $WORKDIR"
-  exit 1
-fi
-
-echo "==> install config if missing"
+echo "==> install config"
 if [ ! -f "$CONFIG_PATH" ]; then
+  echo "==> config.json not found in install dir, copying initial config"
   sudo cp "$WORKDIR/config.json" "$CONFIG_PATH"
   sudo chown "${APP_USER}:${APP_GROUP}" "$CONFIG_PATH"
+elif [ "$UPDATE_CONFIG" -eq 1 ]; then
+  echo "==> updating config.json"
+  sudo cp "$WORKDIR/config.json" "$CONFIG_PATH"
+  sudo chown "${APP_USER}:${APP_GROUP}" "$CONFIG_PATH"
+else
+  echo "==> keeping existing config.json"
 fi
 
 echo "==> write new binary to temp path"
@@ -84,5 +135,10 @@ sudo systemctl restart "${APP_NAME}"
 
 echo "==> status"
 sudo systemctl --no-pager --full status "${APP_NAME}" || true
+
+if [ "$SHOW_LOGS" -eq 1 ]; then
+  echo "==> logs"
+  sudo journalctl -u "${APP_NAME}" -n 100 --no-pager
+fi
 
 echo "Done."
