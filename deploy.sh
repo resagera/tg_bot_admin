@@ -54,11 +54,20 @@ if [ "$UPDATE_REPO" -eq 1 ]; then
     exit 1
   fi
 
-  branch="$(git -C "$WORKDIR" rev-parse --abbrev-ref HEAD)"
-  echo "==> current branch: $branch"
-
+  echo "==> fetch repository"
   git -C "$WORKDIR" fetch origin
-  git -C "$WORKDIR" reset --hard "origin/$branch"
+
+  DEFAULT_BRANCH=$(git -C "$WORKDIR" remote show origin | grep "HEAD branch" | awk '{print $NF}')
+
+  if [ -z "$DEFAULT_BRANCH" ]; then
+    echo "Cannot detect default branch"
+    exit 1
+  fi
+
+  echo "==> repository default branch: $DEFAULT_BRANCH"
+
+  git -C "$WORKDIR" checkout -B "$DEFAULT_BRANCH"
+  git -C "$WORKDIR" reset --hard "origin/$DEFAULT_BRANCH"
   git -C "$WORKDIR" clean -fd
 fi
 
