@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -754,59 +755,75 @@ func runPipeline(expr string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	var cmds []*exec.Cmd
+	type preparedCmd struct {
+		cmd    *exec.Cmd
+		stdout io.ReadCloser
+	}
+
+	prepared := make([]preparedCmd, 0, len(parts))
+
 	for _, p := range parts {
 		args, err := splitArgs(p)
 		if err != nil {
 			return "", err
 		}
+		if len(args) == 0 {
+			return "", errors.New("empty command in pipeline")
+		}
+
 		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-		cmds = append(cmds, cmd)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return "", err
+		}
+		prepared = append(prepared, preparedCmd{
+			cmd:    cmd,
+			stdout: stdout,
+		})
 	}
 
 	var stderr bytes.Buffer
-	for _, c := range cmds {
-		c.Stderr = &stderr
+	for i := range prepared {
+		prepared[i].cmd.Stderr = &stderr
 	}
 
-	for i := 0; i < len(cmds)-1; i++ {
-		r, w := ioPipe()
-		cmds[i].Stdout = w
-		cmds[i+1].Stdin = r
+	for i := 0; i < len(prepared)-1; i++ {
+		prepared[i+1].cmd.Stdin = prepared[i].stdout
 	}
 
-	var stdout bytes.Buffer
-	cmds[len(cmds)-1].Stdout = &stdout
+	var finalOut bytes.Buffer
+	prepared[len(prepared)-1].cmd.Stdout = &finalOut
 
-	for _, c := range cmds {
-		if err := c.Start(); err != nil {
+	for i := range prepared {
+		if err := prepared[i].cmd.Start(); err != nil {
 			return "", err
 		}
 	}
 
-	for i := 0; i < len(cmds)-1; i++ {
-		if pw, ok := cmds[i].Stdout.(*pipeWriter); ok {
-			defer pw.Close()
-		}
-		if pr, ok := cmds[i+1].Stdin.(*pipeReader); ok {
-			defer pr.Close()
-		}
-	}
-
-	for _, c := range cmds {
-		if err := c.Wait(); err != nil {
-			out := stdout.String()
+	for i := range prepared {
+		if err := prepared[i].cmd.Wait(); err != nil {
+			out := finalOut.String()
 			if stderr.Len() > 0 {
-				out += "\n" + stderr.String()
+				if out != "" {
+					out += "\n"
+				}
+				out += stderr.String()
+			}
+			if ctx.Err() == context.DeadlineExceeded {
+				return out, fmt.Errorf("command timeout after %s", timeout)
 			}
 			return out, err
 		}
 	}
 
-	out := stdout.String()
+	out := finalOut.String()
 	if stderr.Len() > 0 {
-		out += "\n" + stderr.String()
+		if out != "" {
+			out += "\n"
+		}
+		out += stderr.String()
 	}
+
 	return out, nil
 }
 
